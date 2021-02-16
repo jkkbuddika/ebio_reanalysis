@@ -1,0 +1,139 @@
+---
+title: "Ebio Analyzed Data Report"
+date: 2021-02-15
+output: html_document
+---
+
+## Introduction
+
+This is an R Markdown document written and deployed by **Kasun Buddika** to distribute reanalyzed data from *Wheeler et al. 2020*. Developed by Gene Yeo's group at UCSD, this novel method, CRaft-ID (CRISPR-based microRaft followed by guide RNA identification), combines pooled CRISPR–Cas9 screening with microraft array technology and high-content imaging to screen image-based phenotypes. For more details, read the paper [here](https://www.nature.com/articles/s41592-020-0826-8).
+
+## Analysis of primer containing reads
+
+The devised CRaft-ID approach requires a high-throughput two-step PCR-based sequencing approach to definitively identify the gRNA and hence the affected gene(s) in each microRaft. Therefore, it is important to quantify the reads originating from proper PCR amplification. 
+
+```{r setup, message=FALSE}
+library(gridExtra)
+library(knitr)
+library(rlang)
+library(tidyverse)
+```
+
+Here are details about library sizes and the number of reads with primers in each library.
+
+```{r import, echo=TRUE, message=FALSE}
+primerReads <- read_csv("data/primer_Counts.csv")
+names(primerReads) <-c("Dataset", "Raw_Count", "Reads_With_Primer")
+
+knitr::kable(primerReads, caption = "Table 1. Raw and primer containing read counts")
+```
+
+Here are graphical representations of number of total raw reads and reads with primer sequences.
+
+```{r figure_1_2, message=FALSE}
+barPlotter <- function(inData, X, Y, fillColor, Title, labY){
+  
+  Y_col <- enquo(Y)
+  X_col <- enquo(X)
+  
+  inData %>%
+    select(c(!!X_col, !!Y_col)) %>%
+    mutate(!!X_col := fct_reorder(!!X_col, !!Y_col)) %>%
+    ggplot(aes(x = !!X_col, y = !!Y_col)) +
+    geom_col(fill = fillColor) +
+    theme_bw() +
+    coord_flip() +
+    ggtitle(str_glue(Title)) +
+    ylab(labY) +
+    scale_y_continuous(labels = scales::scientific)
+}
+
+p1 <- barPlotter(primerReads, Dataset, Raw_Count, "#D55E00", "Raw Read Count", "Read Count")
+p2 <- barPlotter(primerReads, Dataset, Raw_Count, "#CC79A7", "Primer Containing Read Count", "Read Count")
+grid.arrange(p1, p2, nrow=2)
+```
+
+Additionally, the following plot shows the percentage of reads with and without primer sequences.
+
+```{r figure_3, message=FALSE, fig.height=3.25}
+rearrData <- primerReads %>%
+  mutate(No_Primer = Raw_Count - Reads_With_Primer) %>%
+  gather(key = Primer, 
+         value = Counts, 
+         c(Reads_With_Primer:No_Primer))
+
+rearrData %>%
+  ggplot(aes(x = Dataset, y = Counts, fill = Primer)) +
+  geom_col(position="fill") +
+  theme_bw() +
+  scale_fill_manual(values = c("#1B9E77", "#7570B3")) +
+  coord_flip() +
+  ggtitle("Grouped Read Count") +
+  theme(legend.position="bottom") +
+  ylab("% Count")
+```
+
+### Linear regression model for predicting primer containing read number
+
+To estimate the number of reads with primers for a given library, a linear regression model was fitted using a training data set comprised of raw and primer containing read counts from 41 libraries.
+
+```{r, message=FALSE}
+training_data <- read_csv("data/training_data.csv")
+
+fit <- lm(With_Primer ~ Raw_Count - 1, training_data)
+fit
+```
+
+Summary statistics of the fitted model is given below.
+
+```{r, message=FALSE}
+summary(fit)
+```
+
+The following two plots show the distribution of training data alone (left) and the fitted linear regression model (right). The model predicts that a library with 1000 total raw reads will have ~720 reads with primer sequences.
+
+```{r figure_4, message=FALSE, fig.height=3.25}
+p3 <- ggplot(training_data) +
+  geom_point(mapping = aes(x = Raw_Count, y = With_Primer)) +
+  theme_bw() +
+  scale_x_log10() +
+  scale_y_log10() +
+  ylab("Log10 (Reads with Primer)") +
+  xlab("Log10 (Total number of reads)")
+
+p4 <- p3 + 
+  geom_smooth(mapping = aes(x = Raw_Count, y = With_Primer), method = "lm",
+              formula=y~0+x) +
+  annotate(label = sprintf("y = %.3f x\nR² = %.2f", coef(fit), summary(fit)$r.squared),
+           geom = "text", x = 5e+04, y = 1e+06, size = 4)
+
+grid.arrange(p3, p4, nrow=1)
+```
+
+## Analysis of gRNA composition in individual libraries
+
+Next, the most frequent gRNA sequences were identified in each library. Count data are in a different file. Following plot shows the top 10 gRNAs in one of the libraries analyzed.
+
+```{r figure_5, message=FALSE, fig.height=3.25}
+gRNACounts <- read_csv("data/gRNA_Counts.csv") %>%
+  select(2:8)
+
+barPlotter <- function(inData, X, Y, fillColor){
+  
+  Y_col <- enquo(Y)
+  X_col <- enquo(X)
+  
+  inData %>%
+    select(c(!!X_col, !!Y_col)) %>%
+    slice_max(!!Y_col, n=10) %>%
+    mutate(!!X_col := fct_reorder(!!X_col, !!Y_col)) %>%
+    ggplot(aes(x = !!X_col, y = !!Y_col)) +
+    geom_col(fill = fillColor) +
+    theme_bw() +
+    coord_flip() +
+    ggtitle(str_glue("Most abundant gRNAs: {quo_text(Y_col)}")) +
+    ylab("Number of reads with gRNA")
+}
+
+barPlotter(gRNACounts, gRNA, SRR10384085.fastq, "#1B9E77")
+```
